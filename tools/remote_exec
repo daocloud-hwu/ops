@@ -1,0 +1,13 @@
+#!/bin/bash
+
+# remote server should be ssh without password
+
+if [ $# -lt 2 ]; then
+  echo "usage: $0 <ip> <cmd> ..."
+  exit 1
+fi
+
+ip=$1
+shift
+
+ssh root@${ip} $*

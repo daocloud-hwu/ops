@@ -1,0 +1,152 @@
+#!/bin/bash
+
+usage() {
+  echo "Usage:"
+  echo "  $0 sync [prod/stage]"
+  echo "  $0 ls-service [current/latest]"
+  echo "  $0 prepare/upgrade [service_name]"
+  echo "  $0 start/stop/restart [service_name]"
+}
+
+sync() {
+  (cd ${work_dir}/daocloud-release; git pull)
+  rm -rf ${work_dir}/latest
+  cp -r ${work_dir}/daocloud-release/$1 ${work_dir}/latest
+}
+
+service_exist() {
+  [ -d ${work_dir}/$1/$2 ]
+}
+
+list_service() {
+  for svc in `ls ${work_dir}/$1`
+  do
+    echo ${svc}
+  done
+}
+
+prepare_service() {
+  set -e
+  tmpfile=`mktemp`
+  for yml in `ls ${work_dir}/latest/$1/*.yml`
+  do
+    python ${base_dir}/parse_yml.py ${yml} > ${tmpfile}
+    while read line
+    do
+      ip=`echo $line | cut -d " " -f1 | sed "s/-/./g"`
+      image=`echo $line | cut -d " " -f2`
+      export DOCKER_HOST=${ip}:${docker_port}
+      if ! docker inspect ${image} > /dev/null; then
+        docker login -u ${daocloud_user} -p ${daocloud_password} -e ${daocloud_email} daocloud.io
+        docker pull ${image}
+      fi
+      unset DOCKER_HOST
+    done < ${tmpfile}
+  done
+  set +e
+}
+
+upgrade_service() {
+  set -e
+  export DOCKER_HOST=${dce_host}
+  if service_exist current $1; then
+    stop_service $1
+  fi
+
+  start_latest_service $1
+
+  mkdir -p ${work_dir}/bak
+  [ -d ${work_dir}/current/$1 ] && mv ${work_dir}/current/$1 ${work_dir}/bak/`date +%F_%T`
+  cp -r ${work_dir}/latest/$1 ${work_dir}/current/$1
+  set +e
+}
+
+start_latest_service() {
+  set -e
+  for yml in `ls ${work_dir}/latest/$1/*.yml`
+  do
+    docker-compose -f ${yml} up -d
+  done
+  set +e
+}
+
+start_service() {
+  set -e
+  for yml in `ls ${work_dir}/current/$1/*.yml`
+  do
+    docker-compose -f ${yml} up -d
+  done
+  set +e
+}
+
+stop_service() {
+  for yml in `ls ${work_dir}/current/$1/*.yml`
+  do
+    docker-compose -f ${yml} down
+  done
+}
+
+restart_service() {
+  stop_service $1
+  start_service $1
+}
+
+#
+# main
+#
+
+[ $# -lt 1 ] && usage && exit 1
+
+base_dir=`dirname $0`
+work_dir="${base_dir}/.."
+dce_host="10.10.222.178:2375"
+docker_port="12376"
+daocloud_user="haipeng"
+daocloud_password="wuhp2000"
+daocloud_email="haipeng.wu@daocloud.io"
+
+op=$1
+shift
+
+case ${op} in
+  sync)
+    if [ "$1" != "prod" -a "$1" != "stage" ]; then
+      echo "ERROR: invalid op $1!"
+      exit 1
+    fi
+    sync $1
+  ;;
+  ls-service)
+    arg=$1
+    if [ "$1" = "" ]; then
+      arg="current"
+    fi
+
+    if [ ! -d "${work_dir}/${arg}" ]; then
+      echo "ERROR: no ${arg} service!"
+      exit 1
+    fi
+
+    list_service $arg
+  ;;
+  prepare|upgrade)
+    if ! service_exist latest $1; then
+      echo "ERROR: latest service $1 not found!"
+      exit 1
+    fi
+    ${op}_service $1
+    [ $? -eq 0 ] && echo "[   OK   ]   ${op}   service=$1" || echo "[ Failed ]   ${op}   service=$1"
+  ;;
+  start|stop|restart)
+    if ! service_exist current $1; then
+      echo "ERROR: current service $1 not found!"
+      exit 1
+    fi
+    ${op}_service $1
+    [ $? -eq 0 ] && echo "[   OK   ]   ${op}   service=$1" || echo "[ Failed ]   ${op}   service=$1"
+  ;;
+  *)
+    usage
+    exit 1
+  ;;
+esac
