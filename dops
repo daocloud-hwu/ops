@@ -63,6 +63,7 @@ upgrade_service() {
 
 start_latest_service() {
   set -e
+  export DOCKER_HOST=${dce_host}
   for yml in `ls ${work_dir}/latest/$1/*.yml`
   do
     docker-compose -f ${yml} up -d
@@ -72,6 +73,7 @@ start_latest_service() {
 
 start_service() {
   set -e
+  export DOCKER_HOST=${dce_host}
   for yml in `ls ${work_dir}/current/$1/*.yml`
   do
     docker-compose -f ${yml} up -d
@@ -80,6 +82,7 @@ start_service() {
 }
 
 stop_service() {
+  export DOCKER_HOST=${dce_host}
   for yml in `ls ${work_dir}/current/$1/*.yml`
   do
     docker-compose -f ${yml} down
