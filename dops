@@ -5,13 +5,22 @@ usage() {
   echo "  $0 sync [prod/stage]"
   echo "  $0 ls-service [current/latest]"
   echo "  $0 prepare/upgrade [service_name]"
-  echo "  $0 start/stop/restart [service_name]"
+  echo "  $0 start/stop/restart/down [service_name]"
 }
 
 sync() {
   (cd ${work_dir}/daocloud-release; git pull)
   rm -rf ${work_dir}/latest
   cp -r ${work_dir}/daocloud-release/$1 ${work_dir}/latest
+}
+
+join() {
+  result=""
+  for arg in $*
+  do
+    result="${result} -f ${arg}"
+  done
+  echo ${result}
 }
 
 service_exist() {
@@ -43,55 +52,104 @@ prepare_service() {
       unset DOCKER_HOST
     done < ${tmpfile}
   done
+
+  rm -rf ${work_dir}/latest/$1/restart.list.tmp
+
+  if [ -d ${work_dir}/latest/$1/config ]; then
+    for conf in `ls ${work_dir}/latest/$1/config`
+    do
+      need_restart="no"
+      if [ -f ${work_dir}/current/$1/config/${conf} ]; then
+        if diff ${work_dir}/latest/$1/config/${conf} ${work_dir}/current/$1/config/${conf} > /dev/null; then
+          continue
+        else
+          need_restart="yes"
+        fi
+      fi
+
+      python ${base_dir}/parse_config_file.py ${conf} ${work_dir}/latest/$1/*.yml > ${tmpfile}
+      while read line
+      do
+        svc=`echo $line | cut -d " " -f1`
+        ip=`echo $line | cut -d " " -f2 | sed "s/-/./g"`
+        remote_path=`echo $line | cut -d " " -f3`
+        scp ${work_dir}/latest/$1/config/${conf} root@${ip}:${remote_path}
+
+        if [ "${need_restart}" = "yes" ]; then
+          if [ -f ${work_dir}/latest/$1/restart.list.tmp ]; then
+            echo ${svc} >> ${work_dir}/latest/$1/restart.list.tmp
+          else
+            echo ${svc} > ${work_dir}/latest/$1/restart.list.tmp
+          fi
+        fi
+      done < ${tmpfile}
+    done
+  fi
+
   set +e
 }
 
 upgrade_service() {
   set -e
   export DOCKER_HOST=${dce_host}
-  if service_exist current $1; then
-    stop_service $1
-  fi
+  up_latest_service $1
 
-  start_latest_service $1
+  sleep 1
+
+  if [ -f ${work_dir}/latest/$1/restart.list.tmp ]; then
+    for svc in `cat ${work_dir}/latest/$1/restart.list.tmp`
+    do
+      docker-compose `join ${work_dir}/latest/$1/*.yml` restart ${svc}
+    done
+  fi
 
   mkdir -p ${work_dir}/bak
   [ -d ${work_dir}/current/$1 ] && mv ${work_dir}/current/$1 ${work_dir}/bak/`date +%F_%T`
   cp -r ${work_dir}/latest/$1 ${work_dir}/current/$1
+  rm -rf ${work_dir}/current/$1/restart.list.tmp
+
+  unset DOCKER_HOST
   set +e
 }
 
-start_latest_service() {
+up_latest_service() {
   set -e
   export DOCKER_HOST=${dce_host}
-  for yml in `ls ${work_dir}/latest/$1/*.yml`
-  do
-    docker-compose -f ${yml} up -d
-  done
+  docker-compose `join ${work_dir}/latest/$1/*.yml` up -d --remove-orphans
+  unset DOCKER_HOST
+  set +e
+}
+
+down_service() {
+  set -e
+  export DOCKER_HOST=${dce_host}
+  docker-compose `join ${work_dir}/current/$1/*.yml` down
+  unset DOCKER_HOST
   set +e
 }
 
 start_service() {
   set -e
   export DOCKER_HOST=${dce_host}
-  for yml in `ls ${work_dir}/current/$1/*.yml`
-  do
-    docker-compose -f ${yml} up -d
-  done
+  docker-compose `join ${work_dir}/current/$1/*.yml` start
+  unset DOCKER_HOST
   set +e
 }
 
 stop_service() {
+  set -e
   export DOCKER_HOST=${dce_host}
-  for yml in `ls ${work_dir}/current/$1/*.yml`
-  do
-    docker-compose -f ${yml} down
-  done
+  docker-compose `join ${work_dir}/current/$1/*.yml` stop
+  unset DOCKER_HOST
+  set +e
 }
 
 restart_service() {
-  stop_service $1
-  start_service $1
+  set -e
+  export DOCKER_HOST=${dce_host}
+  docker-compose `join ${work_dir}/current/$1/*.yml` restart
+  unset DOCKER_HOST
+  set +e
 }
 
 #
@@ -140,7 +198,7 @@ case ${op} in
     ${op}_service $1
     [ $? -eq 0 ] && echo "[   OK   ]   ${op}   service=$1" || echo "[ Failed ]   ${op}   service=$1"
   ;;
-  start|stop|restart)
+  start|stop|restart|down)
     if ! service_exist current $1; then
       echo "ERROR: current service $1 not found!"
       exit 1
