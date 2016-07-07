@@ -91,15 +91,19 @@ prepare_service() {
 
 upgrade_service() {
   set -e
-  export DOCKER_HOST=${dce_host}
   up_latest_service $1
+  set +e
 
   sleep 1
 
   if [ -f ${work_dir}/latest/$1/restart.list.tmp ]; then
     for svc in `cat ${work_dir}/latest/$1/restart.list.tmp`
     do
+      export DOCKER_HOST=${dce_host}
+      set -e
       docker-compose `join ${work_dir}/latest/$1/*.yml` restart ${svc}
+      set +e
+      unset DOCKER_HOST
     done
   fi
 
@@ -107,9 +111,6 @@ upgrade_service() {
   [ -d ${work_dir}/current/$1 ] && mv ${work_dir}/current/$1 ${work_dir}/bak/`date +%F_%T`
   cp -r ${work_dir}/latest/$1 ${work_dir}/current/$1
   rm -rf ${work_dir}/current/$1/restart.list.tmp
-
-  unset DOCKER_HOST
-  set +e
 }
 
 up_latest_service() {
