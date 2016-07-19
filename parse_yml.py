@@ -10,7 +10,7 @@ for _, content in yaml.load(open(sys.argv[1], "r")).items():
   prefix = "constraint:node=="
   image = content["image"]
   node = ""
-  for env in content["environment"]:
+  for env in content.get("environment", []):
     if env.startswith(prefix):
       node = env[len(prefix):]
       break
